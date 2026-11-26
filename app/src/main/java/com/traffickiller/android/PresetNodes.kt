@@ -8,10 +8,15 @@ import kotlin.math.pow
 
 data class PresetNode(
     val title: String,
-    val url: String
+    val url: String,
+    val userAgent: String? = null
 )
 
 object PresetNodes {
+    const val MIGU_VIDEO_USER_AGENT = "MGPlayer4Android/v9.67.0.2.28/MGProxy/1.8.10.1"
+
+    private val miguVideoHostSuffixes = arrayOf("cmvideo.cn", "miguvideo.com")
+
     val items: List<PresetNode> = listOf(
         PresetNode("自定义链接", ""),
         PresetNode(
@@ -32,9 +37,27 @@ object PresetNodes {
         ),
         PresetNode(
             "咪咕视频 GIF（1.5MB）",
-            "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif"
+            "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif",
+            userAgent = MIGU_VIDEO_USER_AGENT
         )
     )
+
+    fun resolveUserAgent(url: String, defaultUserAgent: String): String {
+        val normalizedUrl = url.trim()
+        items.firstOrNull { it.url == normalizedUrl && !it.userAgent.isNullOrBlank() }
+            ?.userAgent
+            ?.let { return it }
+
+        val host = try {
+            URI(normalizedUrl).host?.lowercase(Locale.US)
+        } catch (_: Exception) {
+            null
+        }
+        if (host != null && miguVideoHostSuffixes.any { host == it || host.endsWith(".$it") }) {
+            return MIGU_VIDEO_USER_AGENT
+        }
+        return defaultUserAgent
+    }
 }
 
 object TrafficUnitFormatter {

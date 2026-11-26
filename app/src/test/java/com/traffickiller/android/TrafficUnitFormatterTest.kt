@@ -42,4 +42,37 @@ class TrafficUnitFormatterTest {
         assertEquals("10.0MB/s", TrafficUnitFormatter.formatSpeed(10.0 * 1024.0 * 1024.0))
         assertEquals("100.00Mbps", TrafficUnitFormatter.formatBitsPerSec(100_000_000.0))
     }
+
+    @Test
+    fun resolveUserAgent_usesMiguPlayerAgentForMiguVideoHostsAndPreset() {
+        val defaultUa = "DefaultAgent/1.0"
+        assertEquals(
+            PresetNodes.MIGU_VIDEO_USER_AGENT,
+            PresetNodes.resolveUserAgent(
+                "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif",
+                defaultUa
+            )
+        )
+        assertEquals(
+            PresetNodes.MIGU_VIDEO_USER_AGENT,
+            PresetNodes.resolveUserAgent(
+                "http://gslbserv.itv.cmvideo.cn:80/test/index.m3u8",
+                defaultUa
+            )
+        )
+        assertEquals(
+            PresetNodes.MIGU_VIDEO_USER_AGENT,
+            PresetNodes.resolveUserAgent(
+                "https://vod.miguvideo.com/stream.mp4",
+                defaultUa
+            )
+        )
+        assertEquals(
+            defaultUa,
+            PresetNodes.resolveUserAgent(
+                "https://cloudphoneh5.buy.139.com/js/chunk-vendors.47eadd9a.js",
+                defaultUa
+            )
+        )
+    }
 }

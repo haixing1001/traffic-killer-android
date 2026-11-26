@@ -216,6 +216,7 @@ class TrafficForegroundService : Service() {
         maxErrors: Int
     ) {
         val buffer = ByteArray(32 * 1024)
+        val requestUserAgent = PresetNodes.resolveUserAgent(url, USER_AGENT)
         while (runGeneration.get() == myGen) {
             val totalNow = TrafficEngineStateHolder.archivedTotalBytes + tracker.getRoundConsumedBytes()
             if (currentLimitBytes > 0L && totalNow >= currentLimitBytes) {
@@ -224,7 +225,7 @@ class TrafficForegroundService : Service() {
 
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", USER_AGENT)
+                .header("User-Agent", requestUserAgent)
                 .header("Accept-Encoding", "identity")
                 .header("Cache-Control", "no-store")
                 .build()
