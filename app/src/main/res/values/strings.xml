@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">流量杀手</string>
+    <string name="subtitle">原生客户端模式 · 无跨域限制 · 支持上限刹停</string>
+    <string name="label_preset_node">预设测试节点</string>
+    <string name="label_target_url">测试地址（支持 http/https 直链）</string>
+    <string name="label_threads">并发线程（1 - 32）</string>
+    <string name="label_limit_gb">流量上限（GB，留空或 0 表示不限）</string>
+    <string name="action_start">开始消耗</string>
+    <string name="action_stop">停止</string>
+    <string name="action_reset_total">清零累计</string>
+    <string name="label_total_traffic">已消耗流量</string>
+    <string name="label_realtime_speed">实时速度</string>
+    <string name="label_avg_speed">平均速度</string>
+    <string name="label_bandwidth">实时带宽</string>
+    <string name="notification_channel_name">流量运行监控</string>
+    <string name="notification_channel_desc">显示流量消耗进度、实时速度并提供停止按钮</string>
+</resources>

@@ -1,0 +1,12 @@
+<resources>
+    <color name="brand_primary">#5B6CF9</color>
+    <color name="brand_primary_dark">#4252D9</color>
+    <color name="surface_bg">#F4F6FB</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="text_primary">#1F2937</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="info_bg">#EEF2FF</color>
+    <color name="info_text">#3730A3</color>
+    <color name="error_bg">#FEF2F2</color>
+    <color name="error_text">#991B1B</color>
+</resources>
