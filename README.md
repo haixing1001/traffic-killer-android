@@ -24,3 +24,7 @@
    ```bash
    gradle assembleDebug
    ```
+
+## GitHub Actions 自动编译
+
+仓库已配置工作流 `.github/workflows/build-apk.yml`：每次推送到 `main`、手动触发（`workflow_dispatch`）或推送 `v*` 标签时，都会自动运行单元测试并构建 `traffic-killer-debug.apk`，可在仓库的 **Actions -> Artifacts** 中直接下载安装（`v*` 标签还会自动附带到 GitHub Release）。

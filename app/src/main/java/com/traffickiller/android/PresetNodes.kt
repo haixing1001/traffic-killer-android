@@ -1,6 +1,7 @@
 package com.traffickiller.android
 
 import java.net.URI
+import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
@@ -95,6 +96,6 @@ object TrafficUnitFormatter {
         val idx = rawIndex.coerceIn(0, units.lastIndex)
         val scaled = value / base.pow(idx.toDouble())
         val digits = precisions[idx]
-        return String.format("%.${digits}f%s", scaled, units[idx])
+        return String.format(Locale.US, "%.${digits}f%s", scaled, units[idx])
     }
 }
