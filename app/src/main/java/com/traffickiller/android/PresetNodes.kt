@@ -36,6 +36,11 @@ object PresetNodes {
             "https://gcache.migu.cn/prod/upload/game_resource/channel_for_homepage_game2/202610/2910/51/20261029105122602_mgwebp1.webp"
         ),
         PresetNode(
+            "咪咕视频 MP4（2.86MB）",
+            "http://ggv.miguvideo.com/v1/iflyad/deliverysystem/dsp/mgc_transfiles/1290/2026/11/11/3VlK4JoNJd9WEATtVDNOFs/2fac0f13/custom_95113/3VlK4JoNJd9WEATtVDNOFscustom_95113MP4.mp4",
+            userAgent = MIGU_VIDEO_USER_AGENT
+        ),
+        PresetNode(
             "咪咕视频 GIF（1.5MB）",
             "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif",
             userAgent = MIGU_VIDEO_USER_AGENT
