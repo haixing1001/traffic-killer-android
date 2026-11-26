@@ -15,28 +15,24 @@ object PresetNodes {
     val items: List<PresetNode> = listOf(
         PresetNode("自定义链接", ""),
         PresetNode(
-            "移动云手机 H5 JS (1.12MB / cloudphoneh5.buy.139.com)",
+            "移动云手机 H5 JS（1.12MB）",
             "https://cloudphoneh5.buy.139.com/js/chunk-vendors.47eadd9a.js"
         ),
         PresetNode(
-            "移动云手机 Banner (392KB / cloud.139.com)",
+            "移动云手机 Banner（392KB）",
             "https://cloud.139.com/cloudimage/dashboard/202604/2039876149437403136.png"
         ),
         PresetNode(
-            "移动云手机静态图 (97KB / img.mcloud.139.com)",
-            "https://img.mcloud.139.com/material_prod/material_media/20251104/1762247817800.png"
-        ),
-        PresetNode(
-            "咪咕快游 影之刃零 (342MB / gcache.migu.cn)",
+            "咪咕快游 影之刃零（342MB）",
             "https://gcache.migu.cn/prod/upload/game_resource/small_screen_file/202610/1410/34/media-file-696ca8be0e3748139e6e6f988447644c/yingzhirenling.mp4"
         ),
         PresetNode(
-            "咪咕视频 GIF (img.cmvideo.cn)",
-            "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif"
+            "咪咕快游 Banner（706KB）",
+            "https://gcache.migu.cn/prod/upload/game_resource/channel_for_homepage_game2/202610/2910/51/20261029105122602_mgwebp1.webp"
         ),
         PresetNode(
-            "Cloudflare Speed 1GB [Global]",
-            "https://speed.cloudflare.com/__down?bytes=1073741824"
+            "咪咕视频 GIF（1.5MB）",
+            "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif"
         )
     )
 }
