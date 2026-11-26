@@ -86,32 +86,28 @@ class TrafficForegroundService : Service() {
                     intent.getIntExtra(EXTRA_THREADS, TrafficUnitFormatter.DEFAULT_THREADS)
                 )
                 val limitBytes = intent.getLongExtra(EXTRA_LIMIT_BYTES, 0L).coerceAtLeast(0L)
-                startRun(url, threads, limitBytes)
+                val isForegroundLaunch = intent.getBooleanExtra(EXTRA_FOREGROUND_LAUNCH, false)
+                startRun(url, threads, limitBytes, isForegroundLaunch)
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startRun(url: String, threads: Int, limitBytes: Long) {
+    private fun startRun(
+        url: String,
+        threads: Int,
+        limitBytes: Long,
+        isForegroundLaunch: Boolean
+    ) {
         if (activeRunJob?.isActive == true) return
 
         if (!TrafficUnitFormatter.isValidHttpUrl(url)) {
-            TrafficEngineStateHolder.update {
-                it.copy(isRunning = false, statusMessage = "链接格式无效，请输入有效的 http/https 地址", isError = true)
-            }
-            stopSelf()
+            abortBeforeStart("链接格式无效，请输入有效的 http/https 地址", isForegroundLaunch)
             return
         }
 
-        if (limitBytes > 0L && TrafficEngineStateHolder.archivedTotalBytes >= limitBytes) {
-            TrafficEngineStateHolder.update {
-                it.copy(
-                    isRunning = false,
-                    statusMessage = "当前累计流量已达到设定的上限，请清零累计或调高上限后继续",
-                    isError = true
-                )
-            }
-            stopSelf()
+        if (TrafficEngineStateHolder.hasReachedLimit(limitBytes)) {
+            abortBeforeStart("当前累计流量已达到设定的上限，请清零累计或调高上限后继续", isForegroundLaunch)
             return
         }
 
@@ -327,6 +323,23 @@ class TrafficForegroundService : Service() {
         stopSelf()
     }
 
+    private fun abortBeforeStart(message: String, isForegroundLaunch: Boolean) {
+        if (isForegroundLaunch) {
+            val notification = buildNotification(
+                consumedBytes = TrafficEngineStateHolder.archivedTotalBytes,
+                limitBytes = 0L,
+                speedBytesPerSec = 0.0,
+                channelText = message
+            )
+            startForegroundCompat(notification)
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        }
+        TrafficEngineStateHolder.update {
+            it.copy(isRunning = false, statusMessage = message, isError = true)
+        }
+        stopSelf()
+    }
+
     private fun buildHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -441,6 +454,7 @@ class TrafficForegroundService : Service() {
         const val EXTRA_URL = "extra_url"
         const val EXTRA_THREADS = "extra_threads"
         const val EXTRA_LIMIT_BYTES = "extra_limit_bytes"
+        const val EXTRA_FOREGROUND_LAUNCH = "extra_foreground_launch"
 
         private const val CHANNEL_ID = "traffic_runner"
         private const val NOTIFICATION_ID = 1001
@@ -465,13 +479,15 @@ class TrafficForegroundService : Service() {
             threads: Int,
             limitBytes: Long
         ) {
+            val useForeground = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
             val intent = Intent(context, TrafficForegroundService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_THREADS, threads)
                 putExtra(EXTRA_LIMIT_BYTES, limitBytes)
+                putExtra(EXTRA_FOREGROUND_LAUNCH, useForeground)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (useForeground) {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)

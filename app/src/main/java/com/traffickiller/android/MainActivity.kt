@@ -155,7 +155,22 @@ class MainActivity : AppCompatActivity() {
     private fun startWithPermissionCheck() {
         val url = binding.urlInput.text?.toString().orEmpty().trim()
         if (!TrafficUnitFormatter.isValidHttpUrl(url)) {
-            showBanner("请输入有效的 http:// 或 https:// 地址", isError = true)
+            TrafficEngineStateHolder.update {
+                it.copy(statusMessage = "请输入有效的 http:// 或 https:// 地址", isError = true)
+            }
+            return
+        }
+
+        val limitBytes =
+            TrafficUnitFormatter.parseLimitGbToBytes(binding.limitInput.text?.toString().orEmpty())
+        if (TrafficEngineStateHolder.hasReachedLimit(limitBytes)) {
+            TrafficEngineStateHolder.update {
+                it.copy(
+                    isRunning = false,
+                    statusMessage = "当前累计流量已达到设定的上限，请清零累计或调高上限后继续",
+                    isError = true
+                )
+            }
             return
         }
 

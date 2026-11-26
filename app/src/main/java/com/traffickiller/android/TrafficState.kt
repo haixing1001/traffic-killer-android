@@ -25,6 +25,9 @@ object TrafficEngineStateHolder {
     @Volatile
     var archivedTotalBytes: Long = 0L
 
+    fun hasReachedLimit(limitBytes: Long): Boolean =
+        limitBytes > 0L && archivedTotalBytes >= limitBytes
+
     fun update(transform: (TrafficSnapshot) -> TrafficSnapshot) {
         _state.update(transform)
     }
