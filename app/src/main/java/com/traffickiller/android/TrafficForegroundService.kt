@@ -387,7 +387,7 @@ class TrafficForegroundService : Service() {
         val speedStr = TrafficUnitFormatter.formatSpeed(speedBytesPerSec)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_notification_traffic)
             .setContentTitle("已消耗 $consumedStr$limitStr · $speedStr")
             .setContentText(channelText)
             .setOngoing(true)
