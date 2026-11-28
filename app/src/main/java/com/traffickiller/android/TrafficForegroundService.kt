@@ -56,6 +56,8 @@ class TrafficForegroundService : Service() {
     @Volatile
     private var liveResolvedAtMs: Long = 0L
     private val segmentCursor = AtomicInteger(0)
+    private val failedSegmentIndexes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private var lastLiveRefreshAtMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -146,6 +148,8 @@ class TrafficForegroundService : Service() {
         liveSegments = emptyList()
         liveResolvedAtMs = 0L
         segmentCursor.set(0)
+        failedSegmentIndexes.clear()
+        lastLiveRefreshAtMs = 0L
         liveResolver = if (dynamicLive) MiguLiveResolver(client) else null
 
         TrafficEngineStateHolder.update {
@@ -162,22 +166,29 @@ class TrafficForegroundService : Service() {
 
         activeRunJob = serviceScope.launch {
             if (dynamicLive) {
+                // Prefer the cached first-5 segments so a run starts instantly;
+                // a fresh resolve only happens when the cache is missing or dead.
                 val cached = liveCache.loadFor(url)
-                if (cached != null && liveCache.ageMs(cached) < MiguLiveResolver.LIVE_TTL_MS) {
-                    applyLiveResolution(url, cached)
+                if (cached != null) {
+                    applyLiveResolution(url, cached, saveToCache = false)
                 }
-                try {
-                    applyLiveResolution(url, liveResolver!!.resolve(url))
-                } catch (e: Exception) {
-                    if (liveSegments.isEmpty()) {
+                if (liveSegments.isEmpty()) {
+                    try {
+                        applyLiveResolution(url, liveResolver!!.resolve(url))
+                    } catch (e: Exception) {
                         stopRun("获取直播地址失败：${e.message ?: "网络错误"}", isError = true)
                         return@launch
                     }
                 }
                 if (runGeneration.get() != myGen) return@launch
+                val cacheAgeSec = if (liveResolvedAtMs > 0L) {
+                    ((System.currentTimeMillis() - liveResolvedAtMs) / 1000L).coerceAtLeast(0L)
+                } else {
+                    0L
+                }
                 TrafficEngineStateHolder.update {
                     it.copy(
-                        statusMessage = "正在运行（$threads 线程 · ${liveSegments.size} 个分片）",
+                        statusMessage = "正在运行（$threads 线程 · ${liveSegments.size} 个分片，缓存 ${cacheAgeSec} 秒）",
                         isError = false
                     )
                 }
@@ -203,23 +214,39 @@ class TrafficForegroundService : Service() {
             // Launch monitoring & speed-sampling ticker
             var lastNotifyTime = 0L
             var liveRefreshFailures = 0
+            var deadRefreshes = 0
+            var bytesAtFirstDeadRefresh = 0L
 
             while (isActive && runGeneration.get() == myGen) {
                 delay(250L)
                 val now = System.currentTimeMillis()
 
-                if (dynamicLive && liveResolver != null &&
-                    now - liveResolvedAtMs >= MiguLiveResolver.LIVE_TTL_MS
+                if (dynamicLive && liveResolver != null && liveSegments.isNotEmpty() &&
+                    failedSegmentIndexes.size >= liveSegments.size &&
+                    now - lastLiveRefreshAtMs >= LIVE_REFRESH_MIN_INTERVAL_MS
                 ) {
+                    // All cached first-5 segments failed: fetch a fresh set.
+                    lastLiveRefreshAtMs = now
                     try {
                         applyLiveResolution(url, liveResolver!!.resolve(url))
                         liveRefreshFailures = 0
                     } catch (e: Exception) {
                         liveRefreshFailures += 1
-                        if (liveRefreshFailures >= 5) {
+                        if (liveRefreshFailures >= LIVE_MAX_REFRESH_FAILURES) {
                             stopRun("直播地址持续刷新失败：${e.message ?: "网络错误"}", isError = true)
                             break
                         }
+                    }
+
+                    deadRefreshes += 1
+                    if (deadRefreshes == 1) {
+                        bytesAtFirstDeadRefresh = tracker.getRoundConsumedBytes()
+                    }
+                    if (deadRefreshes >= LIVE_MAX_DEAD_REFRESHES &&
+                        tracker.getRoundConsumedBytes() <= bytesAtFirstDeadRefresh
+                    ) {
+                        stopRun("缓存分片已失效且刷新后仍无法下载，已停止", isError = true)
+                        break
                     }
                 }
 
@@ -264,11 +291,18 @@ class TrafficForegroundService : Service() {
         }
     }
 
-    private fun applyLiveResolution(providerUrl: String, resolution: MiguLiveResolution) {
+    private fun applyLiveResolution(
+        providerUrl: String,
+        resolution: MiguLiveResolution,
+        saveToCache: Boolean = true
+    ) {
         liveSegments = resolution.segmentUrls
         liveResolvedAtMs = resolution.resolvedAtMs
         segmentCursor.set(0)
-        liveCache.save(providerUrl, resolution)
+        failedSegmentIndexes.clear()
+        if (saveToCache) {
+            liveCache.save(providerUrl, resolution)
+        }
     }
 
     private suspend fun runWorkerLoop(
@@ -288,6 +322,7 @@ class TrafficForegroundService : Service() {
                 break
             }
 
+            var segmentIndex = -1
             val targetUrl: String
             val targetUserAgent: String
             if (dynamicLive) {
@@ -297,6 +332,7 @@ class TrafficForegroundService : Service() {
                     continue
                 }
                 val index = Math.floorMod(segmentCursor.getAndIncrement(), segments.size)
+                segmentIndex = index
                 targetUrl = segments[index]
                 targetUserAgent = PresetNodes.MIGU_VIDEO_USER_AGENT
             } else {
@@ -317,7 +353,11 @@ class TrafficForegroundService : Service() {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         if (dynamicLive) {
-                            // Live segments rotate away; a single stale 404 is not fatal.
+                            // Live segments rotate away; remember the dead one so the
+                            // monitor loop can refresh the cached set once all are dead.
+                            if (segmentIndex >= 0) {
+                                failedSegmentIndexes.add(segmentIndex)
+                            }
                             retrySoon = true
                             return@use
                         }
@@ -561,6 +601,15 @@ class TrafficForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+        /** Minimum gap between two re-resolves after the cached segments all died. */
+        private const val LIVE_REFRESH_MIN_INTERVAL_MS = 1_000L
+
+        /** Consecutive resolve errors before giving up. */
+        private const val LIVE_MAX_REFRESH_FAILURES = 3
+
+        /** Refresh attempt count after which a still-unusable set aborts the run. */
+        private const val LIVE_MAX_DEAD_REFRESHES = 10
 
         fun describeActiveNetwork(context: Context): String {
             val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager

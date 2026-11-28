@@ -65,6 +65,7 @@ class MiguLiveResolver(private val client: OkHttpClient) {
 
         val segments = MiguHlsParser.segmentUris(text)
             .map { MiguHlsParser.resolveAgainst(playlistUrl, it) }
+            .take(SEGMENT_CACHE_LIMIT)
         if (segments.isEmpty()) {
             throw IOException("未解析到 ts 分片")
         }
@@ -100,7 +101,8 @@ class MiguLiveResolver(private val client: OkHttpClient) {
     }
 
     companion object {
-        const val LIVE_TTL_MS = 15_000L
+        /** Only the first few segments are cached and reused until they stop working. */
+        const val SEGMENT_CACHE_LIMIT = 5
 
         fun buildClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -143,9 +145,6 @@ class MiguLinkCache(context: Context) {
             .putLong(KEY_RESOLVED_AT, resolution.resolvedAtMs)
             .apply()
     }
-
-    fun ageMs(resolution: MiguLiveResolution): Long =
-        (System.currentTimeMillis() - resolution.resolvedAtMs).coerceAtLeast(0L)
 
     private companion object {
         const val PREFS_NAME = "migu_live_cache"
