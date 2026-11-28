@@ -28,9 +28,16 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class TrafficForegroundService : Service() {
+
+    private data class LivePlaylistState(
+        val version: Long = 0L,
+        val segments: List<String> = emptyList(),
+        val resolvedAtMs: Long = 0L
+    )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val tracker = TrafficStatsTracker()
@@ -47,16 +54,16 @@ class TrafficForegroundService : Service() {
     private var currentLimitBytes: Long = 0L
     private var currentNetworkLabel: String = "默认网络"
     private val runGeneration = AtomicInteger(0)
+    private val limitStopTriggered = AtomicBoolean(false)
 
     private lateinit var liveCache: MiguLinkCache
     private var liveResolver: MiguLiveResolver? = null
     private var dynamicLive: Boolean = false
+    private val liveStateLock = Any()
     @Volatile
-    private var liveSegments: List<String> = emptyList()
-    @Volatile
-    private var liveResolvedAtMs: Long = 0L
+    private var liveState = LivePlaylistState()
     private val segmentCursor = AtomicInteger(0)
-    private val failedSegmentIndexes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private val failedSegmentIndexes = HashSet<Int>()
     private var lastLiveRefreshAtMs: Long = 0L
 
     override fun onCreate() {
@@ -124,6 +131,7 @@ class TrafficForegroundService : Service() {
         }
 
         val myGen = runGeneration.incrementAndGet()
+        limitStopTriggered.set(false)
         currentLimitBytes = limitBytes
         currentNetworkLabel = describeActiveNetwork(this)
 
@@ -145,10 +153,11 @@ class TrafficForegroundService : Service() {
         lastSampleTime = nowStart
 
         dynamicLive = PresetNodes.isDynamicLiveUrl(url)
-        liveSegments = emptyList()
-        liveResolvedAtMs = 0L
+        synchronized(liveStateLock) {
+            liveState = LivePlaylistState()
+            failedSegmentIndexes.clear()
+        }
         segmentCursor.set(0)
-        failedSegmentIndexes.clear()
         lastLiveRefreshAtMs = 0L
         liveResolver = if (dynamicLive) MiguLiveResolver(client) else null
 
@@ -159,7 +168,7 @@ class TrafficForegroundService : Service() {
                 speedIsAverage = false,
                 limitBytes = limitBytes,
                 activeNetworkLabel = currentNetworkLabel,
-                statusMessage = if (dynamicLive) "正在获取咪咕直播地址..." else "正在运行（$threads 线程）",
+                statusMessage = if (dynamicLive) "正在解析咪咕动态地址..." else "正在运行（$threads 线程）",
                 isError = false
             )
         }
@@ -172,7 +181,7 @@ class TrafficForegroundService : Service() {
                 if (cached != null) {
                     applyLiveResolution(url, cached, saveToCache = false)
                 }
-                if (liveSegments.isEmpty()) {
+                if (liveState.segments.isEmpty()) {
                     try {
                         applyLiveResolution(url, liveResolver!!.resolve(url))
                     } catch (e: Exception) {
@@ -181,14 +190,15 @@ class TrafficForegroundService : Service() {
                     }
                 }
                 if (runGeneration.get() != myGen) return@launch
-                val cacheAgeSec = if (liveResolvedAtMs > 0L) {
-                    ((System.currentTimeMillis() - liveResolvedAtMs) / 1000L).coerceAtLeast(0L)
+                val currentLive = liveState
+                val cacheAgeSec = if (currentLive.resolvedAtMs > 0L) {
+                    ((System.currentTimeMillis() - currentLive.resolvedAtMs) / 1000L).coerceAtLeast(0L)
                 } else {
                     0L
                 }
                 TrafficEngineStateHolder.update {
                     it.copy(
-                        statusMessage = "正在运行（$threads 线程 · ${liveSegments.size} 个分片，缓存 ${cacheAgeSec} 秒）",
+                        statusMessage = "正在运行（$threads 线程 · ${currentLive.segments.size} 个分片，缓存 ${cacheAgeSec} 秒）",
                         isError = false
                     )
                 }
@@ -221,8 +231,7 @@ class TrafficForegroundService : Service() {
                 delay(250L)
                 val now = System.currentTimeMillis()
 
-                if (dynamicLive && liveResolver != null && liveSegments.isNotEmpty() &&
-                    failedSegmentIndexes.size >= liveSegments.size &&
+                if (dynamicLive && liveResolver != null && allLiveSegmentsFailed() &&
                     now - lastLiveRefreshAtMs >= LIVE_REFRESH_MIN_INTERVAL_MS
                 ) {
                     // All cached first-5 segments failed: fetch a fresh set.
@@ -254,7 +263,12 @@ class TrafficForegroundService : Service() {
                 val totalBytes = TrafficEngineStateHolder.archivedTotalBytes + roundBytes
 
                 if (limitBytes > 0L && totalBytes >= limitBytes) {
-                    stopRun("已达到设定的流量上限（${TrafficUnitFormatter.formatBytes(limitBytes)}），已自动停止", isError = false)
+                    if (limitStopTriggered.compareAndSet(false, true)) {
+                        stopRun(
+                            "已达到设定的流量上限（${TrafficUnitFormatter.formatBytes(limitBytes)}），已自动停止",
+                            isError = false
+                        )
+                    }
                     break
                 }
 
@@ -296,13 +310,31 @@ class TrafficForegroundService : Service() {
         resolution: MiguLiveResolution,
         saveToCache: Boolean = true
     ) {
-        liveSegments = resolution.segmentUrls
-        liveResolvedAtMs = resolution.resolvedAtMs
+        synchronized(liveStateLock) {
+            liveState = LivePlaylistState(
+                version = liveState.version + 1L,
+                segments = resolution.segmentUrls,
+                resolvedAtMs = resolution.resolvedAtMs
+            )
+            failedSegmentIndexes.clear()
+        }
         segmentCursor.set(0)
-        failedSegmentIndexes.clear()
         if (saveToCache) {
             liveCache.save(providerUrl, resolution)
         }
+    }
+
+    private fun markLiveSegmentFailed(version: Long, segmentIndex: Int) {
+        if (segmentIndex < 0) return
+        synchronized(liveStateLock) {
+            if (liveState.version == version) {
+                failedSegmentIndexes.add(segmentIndex)
+            }
+        }
+    }
+
+    private fun allLiveSegmentsFailed(): Boolean = synchronized(liveStateLock) {
+        liveState.segments.isNotEmpty() && failedSegmentIndexes.size >= liveState.segments.size
     }
 
     private suspend fun runWorkerLoop(
@@ -323,16 +355,19 @@ class TrafficForegroundService : Service() {
             }
 
             var segmentIndex = -1
+            var liveVersion = -1L
             val targetUrl: String
             val targetUserAgent: String
             if (dynamicLive) {
-                val segments = liveSegments
+                val snapshot = liveState
+                val segments = snapshot.segments
                 if (segments.isEmpty()) {
                     delay(500L)
                     continue
                 }
                 val index = Math.floorMod(segmentCursor.getAndIncrement(), segments.size)
                 segmentIndex = index
+                liveVersion = snapshot.version
                 targetUrl = segments[index]
                 targetUserAgent = PresetNodes.MIGU_VIDEO_USER_AGENT
             } else {
@@ -355,9 +390,7 @@ class TrafficForegroundService : Service() {
                         if (dynamicLive) {
                             // Live segments rotate away; remember the dead one so the
                             // monitor loop can refresh the cached set once all are dead.
-                            if (segmentIndex >= 0) {
-                                failedSegmentIndexes.add(segmentIndex)
-                            }
+                            markLiveSegmentFailed(liveVersion, segmentIndex)
                             retrySoon = true
                             return@use
                         }
@@ -379,12 +412,14 @@ class TrafficForegroundService : Service() {
 
                             val consumed = TrafficEngineStateHolder.archivedTotalBytes + tracker.getRoundConsumedBytes()
                             if (currentLimitBytes > 0L && consumed >= currentLimitBytes) {
-                                serviceScope.launch {
-                                    if (runGeneration.get() == myGen) {
-                                        stopRun(
-                                            "已达到设定的流量上限（${TrafficUnitFormatter.formatBytes(currentLimitBytes)}），已自动停止",
-                                            isError = false
-                                        )
+                                if (limitStopTriggered.compareAndSet(false, true)) {
+                                    serviceScope.launch {
+                                        if (runGeneration.get() == myGen) {
+                                            stopRun(
+                                                "已达到设定的流量上限（${TrafficUnitFormatter.formatBytes(currentLimitBytes)}），已自动停止",
+                                                isError = false
+                                            )
+                                        }
                                     }
                                 }
                                 return
@@ -397,7 +432,8 @@ class TrafficForegroundService : Service() {
             } catch (e: Exception) {
                 if (runGeneration.get() != myGen) return
                 if (dynamicLive) {
-                    // Playlist may already be rotated; just wait for the next refresh.
+                    // Segment or edge node failed; mark this segment so refresh can recover if all die.
+                    markLiveSegmentFailed(liveVersion, segmentIndex)
                     retrySoon = true
                 } else {
                     val errCount = consecutiveErrors.incrementAndGet()
@@ -435,8 +471,10 @@ class TrafficForegroundService : Service() {
         releaseWakeLock()
 
         dynamicLive = false
-        liveSegments = emptyList()
-        liveResolvedAtMs = 0L
+        synchronized(liveStateLock) {
+            liveState = LivePlaylistState()
+            failedSegmentIndexes.clear()
+        }
         liveResolver = null
 
         val roundBytes = if (roundStartMs > 0L) tracker.getRoundConsumedBytes() else 0L
@@ -485,6 +523,8 @@ class TrafficForegroundService : Service() {
         return OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -578,6 +618,10 @@ class TrafficForegroundService : Service() {
         wakeLock = null
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopRun("已达到系统前台服务运行时长上限，已自动停止", isError = false)
+    }
+
     override fun onDestroy() {
         runGeneration.incrementAndGet()
         activeRunJob?.cancel()
@@ -603,7 +647,7 @@ class TrafficForegroundService : Service() {
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
         /** Minimum gap between two re-resolves after the cached segments all died. */
-        private const val LIVE_REFRESH_MIN_INTERVAL_MS = 1_000L
+        private const val LIVE_REFRESH_MIN_INTERVAL_MS = 5_000L
 
         /** Consecutive resolve errors before giving up. */
         private const val LIVE_MAX_REFRESH_FAILURES = 3

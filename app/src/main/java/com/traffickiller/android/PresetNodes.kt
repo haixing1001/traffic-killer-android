@@ -15,10 +15,17 @@ data class PresetNode(
 object PresetNodes {
     const val MIGU_VIDEO_USER_AGENT = "MGPlayer4Android/v9.67.0.2.28/MGProxy/1.8.10.1"
 
-    /** Rotating Migu live entry: returns a fresh playlist address on every call. */
-    const val MIGU_LIVE_PROVIDER_URL = "http://154.8.225.238:9991/migu/migu.php?id=624878356"
+    /** Native Migu playurl/v1 dynamic targets (resolved locally via MD5 sign + ddCalcu). */
+    const val MIGU_LIVE_LOCAL_URL =
+        "https://play.miguvideo.com/playurl/v1/play/playurl?contId=608807420"
+    const val MIGU_VOD_LOCAL_URL =
+        "https://play.miguvideo.com/playurl/v1/play/playurl?contId=738323833"
 
-    private const val MIGU_LIVE_PROVIDER_PREFIX = "http://154.8.225.238:9991/migu/migu.php"
+    /** External Migu live provider entry. */
+    const val MIGU_LIVE_EXTERNAL_URL =
+        "http://154.8.225.238:9991/migu/migu.php?id=624878356"
+    private const val MIGU_LIVE_EXTERNAL_PREFIX =
+        "http://154.8.225.238:9991/migu/migu.php"
 
     private val miguVideoHostSuffixes = arrayOf("cmvideo.cn", "miguvideo.com")
 
@@ -41,24 +48,25 @@ object PresetNodes {
             "https://gcache.migu.cn/prod/upload/game_resource/channel_for_homepage_game2/202610/2910/51/20261029105122602_mgwebp1.webp"
         ),
         PresetNode(
-            "咪咕视频 MP4（2.86MB）",
-            "http://ggv.miguvideo.com/v1/iflyad/deliverysystem/dsp/mgc_transfiles/1290/2026/11/11/3VlK4JoNJd9WEATtVDNOFs/2fac0f13/custom_95113/3VlK4JoNJd9WEATtVDNOFscustom_95113MP4.mp4",
-            userAgent = MIGU_VIDEO_USER_AGENT
+            "咪咕视频 直播（本地取址）",
+            MIGU_LIVE_LOCAL_URL
         ),
         PresetNode(
-            "咪咕视频 GIF（1.5MB）",
-            "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif",
-            userAgent = MIGU_VIDEO_USER_AGENT
+            "咪咕视频 视频（本地取址）",
+            MIGU_VOD_LOCAL_URL
         ),
         PresetNode(
-            "咪咕视频直播（动态取址·临时）",
-            MIGU_LIVE_PROVIDER_URL
+            "咪咕视频 直播（外部取址）",
+            MIGU_LIVE_EXTERNAL_URL
         )
     )
 
-    /** True when the URL is the rotating Migu live entry that must be resolved to ts segments. */
-    fun isDynamicLiveUrl(url: String): Boolean =
-        url.trim().startsWith(MIGU_LIVE_PROVIDER_PREFIX)
+    /** True when the URL must be resolved dynamically (local playurl/v1 or external provider). */
+    fun isDynamicLiveUrl(url: String): Boolean {
+        val trimmed = url.trim()
+        return MiguPlayUrlSigner.parseDynamicTarget(trimmed) != null ||
+            trimmed.startsWith(MIGU_LIVE_EXTERNAL_PREFIX)
+    }
 
     fun resolveUserAgent(url: String, defaultUserAgent: String): String {
         val normalizedUrl = url.trim()

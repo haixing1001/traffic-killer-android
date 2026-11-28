@@ -177,7 +177,6 @@ class MainActivity : AppCompatActivity() {
         val normalizedThreads =
             TrafficUnitFormatter.parseThreadCount(binding.threadInput.text?.toString().orEmpty())
         binding.threadInput.setText(normalizedThreads.toString())
-        saveSettings()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(

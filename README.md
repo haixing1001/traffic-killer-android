@@ -6,13 +6,14 @@
 
 - **精准流量统计**：以系统内核级 `TrafficStats.getUidRxBytes` + `TrafficStats.getUidTxBytes` 增量为准，反映实际网络传输字节；当部分 ROM 返回 `TrafficStats.UNSUPPORTED` 时自动降级为应用层流字节统计。
 - **流量上限自动刹停**：支持自定义 GB 上限（如 `1`、`5`、`10` 或小数 `0.5`，`0` 或留空为不限）。监控协程每 250ms 检查且各下载线程每次 `read` 后即时检查，达到上限立即中断全部连接并停止服务。
-- **咪咕直播动态取址**：预设中的「咪咕视频直播（动态取址·临时）」不写死时效链接，而是从取址接口获取最新的 HLS 播放地址，逐层解析到 `.ts` 分片。**只缓存前 5 条分片**并反复使用；只有当这 5 条都被服务端判定失效（HTTP 非 2xx）时，才会重新取址并替换，避免频繁请求接口。
+- **咪咕动态取址（本地 + 外部）**：预设包含「咪咕视频 直播（本地取址）」（默认频道 `608807420`）、「咪咕视频 视频（本地取址）」（默认 `ProgramID` `738323833`）与「咪咕视频 直播（外部取址）」（`http://154.8.225.238:9991/migu/migu.php?id=624878356`）。其中本地取址直接由客户端通过 `play.miguvideo.com/playurl/v1/play/playurl` MD5 签名与 `ddCalcu` 折算取址并跟进 302 落地 HLS 播放列表，再解析到 `.ts` 分片。**只缓存前 5 条分片**并反复使用；只有当这 5 条都被服务端判定失效（或连接异常）时，才会重新取址并替换，避免频繁请求接口触发频控。
 - **前台服务保活**：使用 `dataSync` 前台服务 + `PARTIAL_WAKE_LOCK` + 常驻进度通知栏（含快捷停止按钮）。
 
 ## 目录结构
 
 - `app/src/main/java/com/traffickiller/android/MainActivity.kt`：主界面交互与参数持久化
 - `app/src/main/java/com/traffickiller/android/TrafficForegroundService.kt`：后台多线程下载、网速采样与上限刹停
+- `app/src/main/java/com/traffickiller/android/MiguLiveResolver.kt`：咪咕 `playurl/v1` MD5 签名、`ddCalcu` 计算、HLS 解析与分片缓存
 - `app/src/main/java/com/traffickiller/android/TrafficStatsTracker.kt`：UID 底层字节统计 + 流计数兜底
 - `app/src/main/java/com/traffickiller/android/PresetNodes.kt`：预设节点与单位换算工具
 - `app/src/main/java/com/traffickiller/android/TrafficState.kt`：UI 与服务共享状态
