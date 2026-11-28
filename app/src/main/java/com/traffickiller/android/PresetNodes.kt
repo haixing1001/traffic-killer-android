@@ -15,6 +15,11 @@ data class PresetNode(
 object PresetNodes {
     const val MIGU_VIDEO_USER_AGENT = "MGPlayer4Android/v9.67.0.2.28/MGProxy/1.8.10.1"
 
+    /** Rotating Migu live entry: returns a fresh playlist address on every call. */
+    const val MIGU_LIVE_PROVIDER_URL = "http://154.8.225.238:9991/migu/migu.php?id=624878356"
+
+    private const val MIGU_LIVE_PROVIDER_PREFIX = "http://154.8.225.238:9991/migu/migu.php"
+
     private val miguVideoHostSuffixes = arrayOf("cmvideo.cn", "miguvideo.com")
 
     val items: List<PresetNode> = listOf(
@@ -41,16 +46,19 @@ object PresetNodes {
             userAgent = MIGU_VIDEO_USER_AGENT
         ),
         PresetNode(
-            "咪咕视频 TS 分片（343KB·临时）",
-            "http://hlsztemgspvod.miguvideo.com:8080/depository_eos_wxlz04/asset/zhengshi/5106/930/961/5106930961/media/5106930961_5344567335_594_mg001_390350604-390701411_272.ts?msisdn=cb88dce6c005e3ae674bc1965f1bf136&mdspid=&spid=800033&netType=7&sid=5702002476&pid=2028597139&timestamp=20261128064508&Channel_ID=0116_2600081000-99000-200300220100002&ProgramID=968181177&ParentNodeID=-99&assertID=5702002476&client_ip=2409:8924:4c51:214c:d023:25ff:fe6d:fe4b&SecurityKey=20261128064508&mvid=5106930961&mcid=1001&mpid=130000202587&userid=20202834&jmhm=cb88dce6c005e3ae674bc1965f1bf136&videocodec=h265&appCode=miguvideo_android&bean=mgspad&tid=android&encrypt=e32346b9cf120c34f4b49321ab84bc6e",
-            userAgent = MIGU_VIDEO_USER_AGENT
-        ),
-        PresetNode(
             "咪咕视频 GIF（1.5MB）",
             "https://img.cmvideo.cn/publish/noms/output/2026/10/09/1O7H81IQNJTSO.gif",
             userAgent = MIGU_VIDEO_USER_AGENT
+        ),
+        PresetNode(
+            "咪咕视频直播（动态取址·临时）",
+            MIGU_LIVE_PROVIDER_URL
         )
     )
+
+    /** True when the URL is the rotating Migu live entry that must be resolved to ts segments. */
+    fun isDynamicLiveUrl(url: String): Boolean =
+        url.trim().startsWith(MIGU_LIVE_PROVIDER_PREFIX)
 
     fun resolveUserAgent(url: String, defaultUserAgent: String): String {
         val normalizedUrl = url.trim()

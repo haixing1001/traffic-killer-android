@@ -48,9 +48,19 @@ class TrafficForegroundService : Service() {
     private var currentNetworkLabel: String = "默认网络"
     private val runGeneration = AtomicInteger(0)
 
+    private lateinit var liveCache: MiguLinkCache
+    private var liveResolver: MiguLiveResolver? = null
+    private var dynamicLive: Boolean = false
+    @Volatile
+    private var liveSegments: List<String> = emptyList()
+    @Volatile
+    private var liveResolvedAtMs: Long = 0L
+    private val segmentCursor = AtomicInteger(0)
+
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        liveCache = MiguLinkCache(this)
         ensureNotificationChannel()
     }
 
@@ -132,6 +142,12 @@ class TrafficForegroundService : Service() {
         lastSampleBytes = 0L
         lastSampleTime = nowStart
 
+        dynamicLive = PresetNodes.isDynamicLiveUrl(url)
+        liveSegments = emptyList()
+        liveResolvedAtMs = 0L
+        segmentCursor.set(0)
+        liveResolver = if (dynamicLive) MiguLiveResolver(client) else null
+
         TrafficEngineStateHolder.update {
             it.copy(
                 isRunning = true,
@@ -139,12 +155,34 @@ class TrafficForegroundService : Service() {
                 speedIsAverage = false,
                 limitBytes = limitBytes,
                 activeNetworkLabel = currentNetworkLabel,
-                statusMessage = "正在运行（$threads 线程）",
+                statusMessage = if (dynamicLive) "正在获取咪咕直播地址..." else "正在运行（$threads 线程）",
                 isError = false
             )
         }
 
         activeRunJob = serviceScope.launch {
+            if (dynamicLive) {
+                val cached = liveCache.loadFor(url)
+                if (cached != null && liveCache.ageMs(cached) < MiguLiveResolver.LIVE_TTL_MS) {
+                    applyLiveResolution(url, cached)
+                }
+                try {
+                    applyLiveResolution(url, liveResolver!!.resolve(url))
+                } catch (e: Exception) {
+                    if (liveSegments.isEmpty()) {
+                        stopRun("获取直播地址失败：${e.message ?: "网络错误"}", isError = true)
+                        return@launch
+                    }
+                }
+                if (runGeneration.get() != myGen) return@launch
+                TrafficEngineStateHolder.update {
+                    it.copy(
+                        statusMessage = "正在运行（$threads 线程 · ${liveSegments.size} 个分片）",
+                        isError = false
+                    )
+                }
+            }
+
             val consecutiveErrors = AtomicInteger(0)
             val maxErrors = maxOf(6, threads * 3)
 
@@ -156,17 +194,35 @@ class TrafficForegroundService : Service() {
                         client = client,
                         myGen = myGen,
                         consecutiveErrors = consecutiveErrors,
-                        maxErrors = maxErrors
+                        maxErrors = maxErrors,
+                        dynamicLive = dynamicLive
                     )
                 }
             }
 
             // Launch monitoring & speed-sampling ticker
             var lastNotifyTime = 0L
+            var liveRefreshFailures = 0
 
             while (isActive && runGeneration.get() == myGen) {
                 delay(250L)
                 val now = System.currentTimeMillis()
+
+                if (dynamicLive && liveResolver != null &&
+                    now - liveResolvedAtMs >= MiguLiveResolver.LIVE_TTL_MS
+                ) {
+                    try {
+                        applyLiveResolution(url, liveResolver!!.resolve(url))
+                        liveRefreshFailures = 0
+                    } catch (e: Exception) {
+                        liveRefreshFailures += 1
+                        if (liveRefreshFailures >= 5) {
+                            stopRun("直播地址持续刷新失败：${e.message ?: "网络错误"}", isError = true)
+                            break
+                        }
+                    }
+                }
+
                 val roundBytes = tracker.getRoundConsumedBytes()
                 val totalBytes = TrafficEngineStateHolder.archivedTotalBytes + roundBytes
 
@@ -208,32 +264,63 @@ class TrafficForegroundService : Service() {
         }
     }
 
+    private fun applyLiveResolution(providerUrl: String, resolution: MiguLiveResolution) {
+        liveSegments = resolution.segmentUrls
+        liveResolvedAtMs = resolution.resolvedAtMs
+        segmentCursor.set(0)
+        liveCache.save(providerUrl, resolution)
+    }
+
     private suspend fun runWorkerLoop(
         url: String,
         client: OkHttpClient,
         myGen: Int,
         consecutiveErrors: AtomicInteger,
-        maxErrors: Int
+        maxErrors: Int,
+        dynamicLive: Boolean
     ) {
         val buffer = ByteArray(32 * 1024)
         val requestUserAgent = PresetNodes.resolveUserAgent(url, USER_AGENT)
+
         while (runGeneration.get() == myGen) {
             val totalNow = TrafficEngineStateHolder.archivedTotalBytes + tracker.getRoundConsumedBytes()
             if (currentLimitBytes > 0L && totalNow >= currentLimitBytes) {
                 break
             }
 
+            val targetUrl: String
+            val targetUserAgent: String
+            if (dynamicLive) {
+                val segments = liveSegments
+                if (segments.isEmpty()) {
+                    delay(500L)
+                    continue
+                }
+                val index = Math.floorMod(segmentCursor.getAndIncrement(), segments.size)
+                targetUrl = segments[index]
+                targetUserAgent = PresetNodes.MIGU_VIDEO_USER_AGENT
+            } else {
+                targetUrl = url
+                targetUserAgent = requestUserAgent
+            }
+
             val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", requestUserAgent)
+                .url(targetUrl)
+                .header("User-Agent", targetUserAgent)
                 .header("Accept-Encoding", "identity")
                 .header("Cache-Control", "no-store")
                 .build()
 
             val call = client.newCall(request)
+            var retrySoon = false
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
+                        if (dynamicLive) {
+                            // Live segments rotate away; a single stale 404 is not fatal.
+                            retrySoon = true
+                            return@use
+                        }
                         serviceScope.launch {
                             if (runGeneration.get() == myGen) {
                                 stopRun("目标节点返回 HTTP ${response.code}，已停止", isError = true)
@@ -269,17 +356,25 @@ class TrafficForegroundService : Service() {
                 throw ce
             } catch (e: Exception) {
                 if (runGeneration.get() != myGen) return
-                val errCount = consecutiveErrors.incrementAndGet()
-                if (errCount >= maxErrors) {
-                    serviceScope.launch {
-                        if (runGeneration.get() == myGen) {
-                            stopRun("连接连续失败：${e.message ?: "网络错误"}", isError = true)
+                if (dynamicLive) {
+                    // Playlist may already be rotated; just wait for the next refresh.
+                    retrySoon = true
+                } else {
+                    val errCount = consecutiveErrors.incrementAndGet()
+                    if (errCount >= maxErrors) {
+                        serviceScope.launch {
+                            if (runGeneration.get() == myGen) {
+                                stopRun("连接连续失败：${e.message ?: "网络错误"}", isError = true)
+                            }
                         }
+                        return
                     }
-                    return
+                    delay((1_000L + errCount * 400L).coerceAtMost(5_000L))
                 }
-                val backoffMs = (1_000L + errCount * 400L).coerceAtMost(5_000L)
-                delay(backoffMs)
+            }
+
+            if (retrySoon) {
+                delay(150L)
             }
         }
     }
@@ -298,6 +393,11 @@ class TrafficForegroundService : Service() {
         activeClient?.dispatcher?.cancelAll()
         activeClient = null
         releaseWakeLock()
+
+        dynamicLive = false
+        liveSegments = emptyList()
+        liveResolvedAtMs = 0L
+        liveResolver = null
 
         val roundBytes = if (roundStartMs > 0L) tracker.getRoundConsumedBytes() else 0L
         val totalBytes = TrafficEngineStateHolder.archivedTotalBytes + roundBytes
